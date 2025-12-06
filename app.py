@@ -608,7 +608,44 @@ def auto_configure():
         print(f"[Auto-Config] Network printer configured: {cfg['network']['host']}")
         return True
 
-    # STEP 1: Scan for USB/ESC/POS printers (preferred - no driver needed)
+    # On Windows, prefer system printers (driver-based) because libusb often conflicts with Windows drivers
+    # On macOS/Linux, prefer USB direct access (no driver needed)
+
+    if PLATFORM == "Windows":
+        # WINDOWS: Try system printers first (more reliable)
+        print("[Auto-Config] Windows detected - checking system printers first...")
+        system_printers = system_printer_manager.detect_printers()
+
+        # Prefer receipt printers
+        receipt_printers = [p for p in system_printers if p.get("is_receipt_printer")]
+        available_printers = receipt_printers if receipt_printers else system_printers
+
+        if available_printers:
+            # Prefer default printer if it's a receipt printer
+            default_printer = next((p for p in available_printers if p.get("is_default")), None)
+            printer = default_printer or available_printers[0]
+
+            print(f"[Auto-Config] Found system printer: {printer['name']}")
+
+            cfg["backend"] = "system"
+            cfg["system"] = {
+                "name": printer["name"],
+                "is_receipt_printer": printer.get("is_receipt_printer", False)
+            }
+            cfg["usb"] = None
+            cfg["network"] = {"host": "", "port": 9100}
+            save_config(cfg)
+
+            # Configure manager
+            system_printer_manager.configure(printer["name"])
+
+            print(f"[Auto-Config] System printer configured successfully!")
+            return True
+
+        # Fall back to USB on Windows (may not work without Zadig driver)
+        print("[Auto-Config] No system printers found, trying USB...")
+
+    # STEP 1: Scan for USB/ESC/POS printers (preferred on macOS/Linux)
     print("[Auto-Config] Scanning for USB printers...")
     usb_printers = detect_thermal_printers()
 
@@ -633,8 +670,9 @@ def auto_configure():
         print(f"[Auto-Config] USB printer configured successfully!")
         return True
 
-    # STEP 2: Fall back to system printers (driver-based)
-    print("[Auto-Config] No USB printers found, checking system printers...")
+    # STEP 2: Fall back to system printers (for macOS/Linux if USB not found)
+    if PLATFORM != "Windows":
+        print("[Auto-Config] No USB printers found, checking system printers...")
     system_printers = system_printer_manager.detect_printers()
 
     # Prefer receipt printers

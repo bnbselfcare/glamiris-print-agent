@@ -78,6 +78,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller pywin32 libusb
+          # Run pywin32 post-install script to register COM objects
+          python -c "import win32com.client" 2>$null || true
 
       - name: Download libusb DLL
         run: |
@@ -96,7 +98,7 @@ jobs:
       - name: Build Windows exe
         run: |
           $escpos_path = "${{ steps.find_caps.outputs.ESCPOS_PATH }}"
-          pyinstaller --name "GlamirisPrintAgent" --onefile --windowed --icon assets/icon.png --add-data "assets;assets" --add-data "$escpos_path;escpos" --add-binary "libusb_dll\libusb-1.0.dll;." --hidden-import pystray._win32 --hidden-import PIL._tkinter_finder --hidden-import win32print --hidden-import win32api --hidden-import usb.core --hidden-import usb.util --hidden-import usb.backend.libusb1 tray_app.py
+          pyinstaller --name "GlamirisPrintAgent" --onefile --windowed --icon assets/icon.png --add-data "assets;assets" --add-data "$escpos_path;escpos" --add-binary "libusb_dll\libusb-1.0.dll;." --hidden-import pystray._win32 --hidden-import PIL._tkinter_finder --hidden-import win32print --hidden-import win32api --hidden-import win32con --hidden-import pywintypes --hidden-import usb.core --hidden-import usb.util --hidden-import usb.backend.libusb1 tray_app.py
 
       - name: Rename executable
         run: |
