@@ -19,6 +19,8 @@ if PLATFORM == "Windows":
     try:
         import win32print
         import win32api
+        import win32file
+        import win32con
         HAS_WIN32PRINT = True
     except ImportError:
         HAS_WIN32PRINT = False
@@ -184,6 +186,147 @@ class USBPrinterManager:
 
 # Global USB printer manager instance
 printer_manager = USBPrinterManager()
+
+
+# ---------------- WINDOWS RAW USB PRINTER ----------------
+
+class WindowsRawUSBPrinter:
+    """
+    Send ESC/POS commands to USB printers on Windows using win32print RAW mode.
+    This bypasses libusb and uses Windows' native USB printer support.
+    Works when the printer shows up in Device Manager but libusb can't access it.
+    """
+
+    def __init__(self):
+        self._printer_name = None
+        self._vid = None
+        self._pid = None
+
+    def find_printer_by_vid_pid(self, vid, pid):
+        """
+        Find a Windows printer that matches the given VID/PID.
+        Returns the printer name or None.
+        """
+        if not HAS_WIN32PRINT:
+            return None
+
+        # Format VID/PID for matching
+        vid_str = f"{vid:04X}".upper()
+        pid_str = f"{pid:04X}".upper()
+        vid_hex = hex(vid).upper()
+        pid_hex = hex(pid).upper()
+
+        try:
+            # Get all printers
+            printers = win32print.EnumPrinters(
+                win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS
+            )
+
+            for flags, desc, name, comment in printers:
+                # Try to get printer port info
+                try:
+                    hprinter = win32print.OpenPrinter(name)
+                    try:
+                        # Get printer info level 2 which includes port name
+                        info = win32print.GetPrinter(hprinter, 2)
+                        port_name = info.get('pPortName', '').upper()
+
+                        # USB printers often have port names like "USB001" or contain VID/PID
+                        # Some drivers include VID_xxxx&PID_xxxx in the port name
+                        if f"VID_{vid_str}" in port_name or f"VID_{vid_hex[2:]}" in port_name:
+                            if f"PID_{pid_str}" in port_name or f"PID_{pid_hex[2:]}" in port_name:
+                                logger.info(f"Found Windows printer '{name}' matching VID={vid_hex} PID={pid_hex}")
+                                return name
+
+                        # Check if it's a USB port and the name suggests it's our printer type
+                        if port_name.startswith("USB"):
+                            # Could be our printer - check name for thermal/POS keywords
+                            name_lower = name.lower()
+                            if any(kw in name_lower for kw in ["pos", "thermal", "receipt", "rongta", "58", "80"]):
+                                logger.info(f"Found likely USB thermal printer: {name} on {port_name}")
+                                return name
+
+                    finally:
+                        win32print.ClosePrinter(hprinter)
+                except Exception as e:
+                    logger.debug(f"Could not get info for printer {name}: {e}")
+                    continue
+
+        except Exception as e:
+            logger.error(f"Error enumerating Windows printers: {e}")
+
+        return None
+
+    def configure(self, vid, pid):
+        """Configure the printer by VID/PID, finding the Windows printer name."""
+        self._vid = vid
+        self._pid = pid
+        self._printer_name = self.find_printer_by_vid_pid(vid, pid)
+
+        if self._printer_name:
+            logger.info(f"Windows RAW USB configured: {self._printer_name}")
+        else:
+            logger.warning(f"No Windows printer found for VID={hex(vid)} PID={hex(pid)}")
+
+    def configure_by_name(self, printer_name):
+        """Configure directly by Windows printer name."""
+        self._printer_name = printer_name
+        logger.info(f"Windows RAW USB configured by name: {printer_name}")
+
+    def send_raw(self, data):
+        """Send raw bytes to the printer using Windows Print Spooler RAW mode."""
+        if not self._printer_name:
+            raise RuntimeError("Windows printer not configured")
+
+        if not HAS_WIN32PRINT:
+            raise RuntimeError("win32print not available")
+
+        try:
+            hprinter = win32print.OpenPrinter(self._printer_name)
+            try:
+                # Start a RAW document - this sends bytes directly without processing
+                win32print.StartDocPrinter(hprinter, 1, ("ESC/POS", None, "RAW"))
+                try:
+                    win32print.StartPagePrinter(hprinter)
+                    win32print.WritePrinter(hprinter, data)
+                    win32print.EndPagePrinter(hprinter)
+                finally:
+                    win32print.EndDocPrinter(hprinter)
+            finally:
+                win32print.ClosePrinter(hprinter)
+
+            return True
+
+        except Exception as e:
+            raise RuntimeError(f"Windows RAW print failed: {e}")
+
+    def print_text(self, text):
+        """Print text with ESC/POS formatting."""
+        commands = b"\x1B\x40"  # ESC @ - Initialize
+        commands += text.encode('cp437', errors='replace')
+        commands += b"\n"
+        commands += b"\x1D\x56\x00"  # GS V 0 - Full cut
+        return self.send_raw(commands)
+
+    def test_print(self):
+        """Send a test print."""
+        commands = b"\x1B\x40"  # Initialize
+        commands += b"*** Glamiris Test Print ***\n\n"
+        commands += b"\x1D\x56\x00"  # Cut
+        return self.send_raw(commands)
+
+    def open_cash_drawer(self):
+        """Open the cash drawer."""
+        # ESC p 0 25 250
+        return self.send_raw(b"\x1B\x70\x00\x19\xFA")
+
+    def is_available(self):
+        """Check if this printer backend is available."""
+        return self._printer_name is not None and HAS_WIN32PRINT
+
+
+# Global Windows RAW USB printer instance
+windows_raw_printer = WindowsRawUSBPrinter()
 
 
 # ---------------- SYSTEM PRINTER MANAGER ----------------
@@ -974,6 +1117,18 @@ def do_print():
 
     vid = parse_int_maybe_hex(usb_cfg["idVendor"])
     pid = parse_int_maybe_hex(usb_cfg["idProduct"])
+
+    # On Windows, try Windows RAW printing first (bypasses libusb issues)
+    if PLATFORM == "Windows" and HAS_WIN32PRINT:
+        try:
+            windows_raw_printer.configure(vid, pid)
+            if windows_raw_printer.is_available():
+                windows_raw_printer.print_text(text)
+                return jsonify({"status": "ok"})
+        except Exception as e:
+            logger.warning(f"Windows RAW print failed, trying libusb: {e}")
+
+    # Try libusb (works on macOS/Linux, may fail on Windows)
     printer_manager.configure(vid, pid)
 
     def print_operation(dev):
@@ -1026,6 +1181,18 @@ def test_print():
 
     vid = parse_int_maybe_hex(usb_cfg["idVendor"])
     pid = parse_int_maybe_hex(usb_cfg["idProduct"])
+
+    # On Windows, try Windows RAW printing first (bypasses libusb issues)
+    if PLATFORM == "Windows" and HAS_WIN32PRINT:
+        try:
+            windows_raw_printer.configure(vid, pid)
+            if windows_raw_printer.is_available():
+                windows_raw_printer.test_print()
+                return jsonify({"status": "ok"})
+        except Exception as e:
+            logger.warning(f"Windows RAW print failed, trying libusb: {e}")
+
+    # Try libusb (works on macOS/Linux, may fail on Windows)
     printer_manager.configure(vid, pid)
 
     def test_print_operation(dev):
@@ -1077,6 +1244,18 @@ def open_cashdrawer():
 
     vid = parse_int_maybe_hex(usb_cfg["idVendor"])
     pid = parse_int_maybe_hex(usb_cfg["idProduct"])
+
+    # On Windows, try Windows RAW printing first (bypasses libusb issues)
+    if PLATFORM == "Windows" and HAS_WIN32PRINT:
+        try:
+            windows_raw_printer.configure(vid, pid)
+            if windows_raw_printer.is_available():
+                windows_raw_printer.open_cash_drawer()
+                return jsonify({"status": "ok"})
+        except Exception as e:
+            logger.warning(f"Windows RAW cash drawer failed, trying libusb: {e}")
+
+    # Try libusb (works on macOS/Linux, may fail on Windows)
     printer_manager.configure(vid, pid)
 
     def cashdrawer_operation(dev):
