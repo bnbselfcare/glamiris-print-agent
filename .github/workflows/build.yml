@@ -27,19 +27,27 @@ jobs:
       - name: Build macOS app
         run: |
           pyinstaller --name "Glamiris Print Agent" \
-            --onefile \
             --windowed \
             --icon assets/icon.png \
             --add-data "assets:assets" \
             --hidden-import pystray._darwin \
             --hidden-import PIL._tkinter_finder \
+            --hidden-import usb.core \
+            --hidden-import usb.util \
+            --hidden-import usb.backend.libusb1 \
             --osx-bundle-identifier com.glamiris.printagent \
             tray_app.py
+
+      - name: Fix app bundle for LSUIElement
+        run: |
+          # Add LSUIElement to hide from dock (menu bar app)
+          /usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" "dist/Glamiris Print Agent.app/Contents/Info.plist" || true
+          /usr/libexec/PlistBuddy -c "Add :NSHighResolutionCapable bool true" "dist/Glamiris Print Agent.app/Contents/Info.plist" || true
 
       - name: Create DMG
         run: |
           mkdir -p dmg_contents
-          cp -r "dist/Glamiris Print Agent.app" dmg_contents/ 2>/dev/null || cp "dist/Glamiris Print Agent" dmg_contents/
+          cp -r "dist/Glamiris Print Agent.app" dmg_contents/
           hdiutil create -volname "Glamiris Print Agent" -srcfolder dmg_contents -ov -format UDZO GlamirisPrintAgent-macOS.dmg
 
       - name: Upload macOS artifact
