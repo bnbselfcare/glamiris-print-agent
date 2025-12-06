@@ -24,12 +24,19 @@ jobs:
           pip install pyinstaller
           brew install libusb
 
+      - name: Find escpos path
+        id: find_escpos
+        run: |
+          ESCPOS_PATH=$(python -c "import escpos; import os; print(os.path.dirname(escpos.__file__))")
+          echo "ESCPOS_PATH=$ESCPOS_PATH" >> $GITHUB_OUTPUT
+
       - name: Build macOS app
         run: |
           pyinstaller --name "Glamiris Print Agent" \
             --windowed \
             --icon assets/icon.png \
             --add-data "assets:assets" \
+            --add-data "${{ steps.find_escpos.outputs.ESCPOS_PATH }}:escpos" \
             --hidden-import pystray._darwin \
             --hidden-import PIL._tkinter_finder \
             --hidden-import usb.core \
@@ -72,9 +79,16 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller pywin32
 
+      - name: Find escpos capabilities.json
+        id: find_caps
+        run: |
+          $escpos_path = python -c "import escpos; import os; print(os.path.dirname(escpos.__file__))"
+          echo "ESCPOS_PATH=$escpos_path" >> $env:GITHUB_OUTPUT
+
       - name: Build Windows exe
         run: |
-          pyinstaller --name "GlamirisPrintAgent" --onefile --windowed --icon assets/icon.png --add-data "assets;assets" --hidden-import pystray._win32 --hidden-import PIL._tkinter_finder --hidden-import win32print --hidden-import win32api tray_app.py
+          $escpos_path = "${{ steps.find_caps.outputs.ESCPOS_PATH }}"
+          pyinstaller --name "GlamirisPrintAgent" --onefile --windowed --icon assets/icon.png --add-data "assets;assets" --add-data "$escpos_path;escpos" --hidden-import pystray._win32 --hidden-import PIL._tkinter_finder --hidden-import win32print --hidden-import win32api --hidden-import usb.core --hidden-import usb.util --hidden-import usb.backend.libusb1 tray_app.py
 
       - name: Rename executable
         run: |
