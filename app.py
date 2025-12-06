@@ -499,7 +499,7 @@ class SystemPrinterManager:
                 pass
 
     def _print_windows(self, text):
-        """Print via Windows Print Spooler."""
+        """Print via Windows Print Spooler with ESC/POS commands."""
         if not HAS_WIN32PRINT:
             raise RuntimeError("win32print not available")
 
@@ -507,12 +507,17 @@ class SystemPrinterManager:
             # Open printer
             hprinter = win32print.OpenPrinter(self._selected_printer)
             try:
-                # Start document
-                job = win32print.StartDocPrinter(hprinter, 1, ("Receipt", None, "RAW"))
+                # Start document in RAW mode
+                win32print.StartDocPrinter(hprinter, 1, ("Receipt", None, "RAW"))
                 try:
                     win32print.StartPagePrinter(hprinter)
-                    # Send text as raw data
-                    win32print.WritePrinter(hprinter, text.encode('cp437', errors='replace'))
+                    # Build ESC/POS commands
+                    data = b"\x1B\x40"  # ESC @ - Initialize printer
+                    data += text.encode('cp437', errors='replace')
+                    data += b"\n"
+                    data += b"\x1D\x56\x00"  # GS V 0 - Full cut
+                    # Send raw ESC/POS data
+                    win32print.WritePrinter(hprinter, data)
                     win32print.EndPagePrinter(hprinter)
                 finally:
                     win32print.EndDocPrinter(hprinter)
@@ -971,7 +976,7 @@ def status():
     return jsonify({
         "status": "ok",
         "agent": "Glamiris Python Print Agent",
-        "version": "1.0.9",
+        "version": "1.0.10",
         "configured": cfg.get("usb") or cfg.get("network")
     })
 
@@ -1377,7 +1382,7 @@ def health_check():
 
     result = {
         "agent": "Glamiris Print Agent",
-        "version": "1.0.9",
+        "version": "1.0.10",
         "server": "running",
         "backend": backend,
         "configured": bool(cfg.get("usb") or cfg.get("system") or cfg.get("network", {}).get("host")),
