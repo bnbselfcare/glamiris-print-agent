@@ -976,7 +976,7 @@ def status():
     return jsonify({
         "status": "ok",
         "agent": "Glamiris Python Print Agent",
-        "version": "1.0.11",
+        "version": "1.0.12",
         "configured": cfg.get("usb") or cfg.get("network")
     })
 
@@ -1382,7 +1382,7 @@ def health_check():
 
     result = {
         "agent": "Glamiris Print Agent",
-        "version": "1.0.11",
+        "version": "1.0.12",
         "server": "running",
         "backend": backend,
         "configured": bool(cfg.get("usb") or cfg.get("system") or cfg.get("network", {}).get("host")),
@@ -1445,6 +1445,8 @@ def test_direct_usb():
     """
     Test direct USB communication bypassing Windows Print Spooler.
     Uses libusb to send ESC/POS commands directly to the USB device.
+    On Windows we also try the RAW spooler path first, because direct
+    libusb access requires replacing the driver (e.g., with libusbK via Zadig).
     """
     # Find the USB printer
     usb_printers = detect_thermal_printers()
@@ -1466,6 +1468,28 @@ def test_direct_usb():
         "steps": []
     }
 
+    # On Windows, try the spooler/RAW path first since libusb often fails
+    if PLATFORM == "Windows":
+        result["steps"].append("Windows detected - trying RAW spooler test before direct USB")
+        if HAS_WIN32PRINT:
+            windows_raw_printer.configure(vid, pid)
+            if windows_raw_printer.is_available():
+                try:
+                    windows_raw_printer.test_print()
+                    result["status"] = "ok"
+                    result["backend"] = "windows_raw"
+                    result["message"] = "Test print sent via Windows print spooler"
+                    result["hint"] = "Direct USB on Windows needs the libusbK driver (install with Zadig) or keep using the system printer backend."
+                    return jsonify(result)
+                except Exception as e:
+                    result["steps"].append(f"Windows RAW test failed: {e}")
+            else:
+                result["steps"].append("Windows spooler printer not found for this VID/PID")
+        else:
+            result["steps"].append("pywin32 not available, skipping Windows spooler test")
+
+        result["steps"].append("Falling back to direct libusb test (requires libusbK/Zadig driver on Windows)")
+
     try:
         # Step 1: Find device
         result["steps"].append("Finding USB device...")
@@ -1483,14 +1507,14 @@ def test_direct_usb():
             else:
                 result["steps"].append("No kernel driver attached")
         except (usb.core.USBError, NotImplementedError) as e:
-            result["steps"].append(f"Kernel driver check: {e}")
+            result["steps"].append(f"Kernel driver check not supported: {e}")
 
         # Step 3: Set configuration
         try:
             result["steps"].append("Setting USB configuration...")
             dev.set_configuration()
             result["steps"].append("Configuration set")
-        except usb.core.USBError as e:
+        except (usb.core.USBError, NotImplementedError) as e:
             result["steps"].append(f"Set config (may already be set): {e}")
 
         # Step 4: Find OUT endpoint
@@ -1537,11 +1561,15 @@ def test_direct_usb():
         result["status"] = "error"
         result["error"] = str(e)
         result["error_code"] = e.errno if hasattr(e, 'errno') else None
+        if PLATFORM == "Windows":
+            result["hint"] = "Direct USB needs the libusbK driver (Zadig). Or switch to the system printer backend."
         return jsonify(result), 500
     except Exception as e:
         result["steps"].append(f"Error: {e}")
         result["status"] = "error"
         result["error"] = str(e)
+        if PLATFORM == "Windows":
+            result["hint"] = "Direct USB needs the libusbK driver (Zadig). Or switch to the system printer backend."
         return jsonify(result), 500
 
 
