@@ -783,16 +783,45 @@ def auto_configure():
         print("[Auto-Config] Windows detected - checking system printers first...")
         system_printers = system_printer_manager.detect_printers()
 
-        # Prefer receipt printers
-        receipt_printers = [p for p in system_printers if p.get("is_receipt_printer")]
-        available_printers = receipt_printers if receipt_printers else system_printers
+        # Get detailed port info for each printer to find USB-connected ones
+        usb_port_printers = []
+        receipt_printers = []
+
+        if HAS_WIN32PRINT:
+            for p in system_printers:
+                try:
+                    hprinter = win32print.OpenPrinter(p["name"])
+                    try:
+                        info = win32print.GetPrinter(hprinter, 2)
+                        port = info.get('pPortName', '').upper()
+                        p["port"] = port
+                        # Prefer printers on USB ports (USB001, USB002, etc.)
+                        if port.startswith("USB"):
+                            usb_port_printers.append(p)
+                            print(f"[Auto-Config] Found USB-connected printer: {p['name']} on {port}")
+                    finally:
+                        win32print.ClosePrinter(hprinter)
+                except:
+                    pass
+
+                if p.get("is_receipt_printer"):
+                    receipt_printers.append(p)
+
+        # Priority: USB-connected receipt printers > USB printers > receipt printers > default
+        if usb_port_printers:
+            # Prefer USB receipt printers
+            usb_receipt = [p for p in usb_port_printers if p.get("is_receipt_printer")]
+            available_printers = usb_receipt if usb_receipt else usb_port_printers
+        elif receipt_printers:
+            available_printers = receipt_printers
+        else:
+            available_printers = system_printers
 
         if available_printers:
-            # Prefer default printer if it's a receipt printer
-            default_printer = next((p for p in available_printers if p.get("is_default")), None)
-            printer = default_printer or available_printers[0]
+            # Take first available (already prioritized)
+            printer = available_printers[0]
 
-            print(f"[Auto-Config] Found system printer: {printer['name']}")
+            print(f"[Auto-Config] Found system printer: {printer['name']} (port: {printer.get('port', 'unknown')})")
 
             cfg["backend"] = "system"
             cfg["system"] = {
@@ -942,7 +971,7 @@ def status():
     return jsonify({
         "status": "ok",
         "agent": "Glamiris Python Print Agent",
-        "version": "1.0.8",
+        "version": "1.0.9",
         "configured": cfg.get("usb") or cfg.get("network")
     })
 
@@ -1348,7 +1377,7 @@ def health_check():
 
     result = {
         "agent": "Glamiris Print Agent",
-        "version": "1.0.8",
+        "version": "1.0.9",
         "server": "running",
         "backend": backend,
         "configured": bool(cfg.get("usb") or cfg.get("system") or cfg.get("network", {}).get("host")),
