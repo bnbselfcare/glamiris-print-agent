@@ -395,11 +395,13 @@ class SettingsWindow:
         """Send a test print."""
         import requests
         try:
-            resp = requests.post("http://127.0.0.1:5678/test-print", timeout=5)
+            resp = requests.post("http://127.0.0.1:5678/test-print", timeout=15)
             if resp.status_code == 200:
                 messagebox.showinfo("Success", "Test print sent!")
             else:
                 messagebox.showerror("Error", f"Print failed: {resp.json().get('error', 'Unknown error')}")
+        except requests.exceptions.Timeout:
+            messagebox.showerror("Error", "Request timed out. Check if printer is connected.")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to send test print: {e}")
 
@@ -407,11 +409,13 @@ class SettingsWindow:
         """Open the cash drawer."""
         import requests
         try:
-            resp = requests.post("http://127.0.0.1:5678/open-cashdrawer", timeout=5)
+            resp = requests.post("http://127.0.0.1:5678/open-cashdrawer", timeout=15)
             if resp.status_code == 200:
                 messagebox.showinfo("Success", "Cash drawer opened!")
             else:
                 messagebox.showerror("Error", f"Failed: {resp.json().get('error', 'Unknown error')}")
+        except requests.exceptions.Timeout:
+            messagebox.showerror("Error", "Request timed out. Check if printer is connected.")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to open drawer: {e}")
 

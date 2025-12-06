@@ -49,8 +49,8 @@ class USBPrinterManager:
         self._pid = None
         self._last_error_time = 0
         self._error_count = 0
-        self._max_retries = 3
-        self._retry_delay = 0.5
+        self._max_retries = 2  # Reduced for faster feedback
+        self._retry_delay = 0.3  # Reduced delay
         self._error_cooldown = 5  # seconds before resetting error count
 
     def configure(self, vid, pid):
