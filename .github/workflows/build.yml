@@ -1,0 +1,106 @@
+name: Build Installers
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on version tags like v1.0.0
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+          brew install libusb
+
+      - name: Build macOS app
+        run: |
+          pyinstaller --name "Glamiris Print Agent" \
+            --onefile \
+            --windowed \
+            --icon assets/icon.png \
+            --add-data "assets:assets" \
+            --hidden-import pystray._darwin \
+            --hidden-import PIL._tkinter_finder \
+            --osx-bundle-identifier com.glamiris.printagent \
+            tray_app.py
+
+      - name: Create DMG
+        run: |
+          mkdir -p dmg_contents
+          cp -r "dist/Glamiris Print Agent.app" dmg_contents/ 2>/dev/null || cp "dist/Glamiris Print Agent" dmg_contents/
+          hdiutil create -volname "Glamiris Print Agent" -srcfolder dmg_contents -ov -format UDZO GlamirisPrintAgent-macOS.dmg
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-installer
+          path: GlamirisPrintAgent-macOS.dmg
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pywin32
+
+      - name: Build Windows exe
+        run: |
+          pyinstaller --name "GlamirisPrintAgent" --onefile --windowed --icon assets/icon.png --add-data "assets;assets" --hidden-import pystray._win32 --hidden-import PIL._tkinter_finder --hidden-import win32print --hidden-import win32api tray_app.py
+
+      - name: Rename executable
+        run: |
+          move dist\GlamirisPrintAgent.exe GlamirisPrintAgent-Windows.exe
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: GlamirisPrintAgent-Windows.exe
+
+  release:
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-installer
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            GlamirisPrintAgent-macOS.dmg
+            GlamirisPrintAgent-Windows.exe
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
