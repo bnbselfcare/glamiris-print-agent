@@ -443,7 +443,7 @@ def create_tray_icon():
     menu_items = [
         pystray.MenuItem(
             f"{APP_NAME} v{VERSION}",
-            None,
+            lambda icon, item: None,
             enabled=False
         ),
     ]
@@ -452,8 +452,8 @@ def create_tray_icon():
     if update_available:
         menu_items.append(
             pystray.MenuItem(
-                f"⬆️ Update to v{update_available}",
-                lambda: download_update(),
+                f"Update to v{update_available}",
+                lambda icon, item: download_update(),
                 default=True
             )
         )
@@ -461,8 +461,8 @@ def create_tray_icon():
     menu_items.extend([
         pystray.Menu.SEPARATOR,
         pystray.MenuItem(
-            "Settings...",
-            lambda: settings_window.show()
+            "Settings",
+            on_settings
         ),
         pystray.MenuItem(
             "Test Print",
@@ -489,6 +489,11 @@ def create_tray_icon():
     )
 
     return icon
+
+
+def on_settings(icon, item):
+    """Handle settings from tray menu."""
+    settings_window.show()
 
 
 def on_test_print(icon, item):
