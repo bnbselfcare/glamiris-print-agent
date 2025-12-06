@@ -29,7 +29,7 @@ from app import app, detect_thermal_printers, load_config, save_config, auto_con
 # ---------------- CONSTANTS ----------------
 
 APP_NAME = "Glamiris Print Agent"
-VERSION = "1.0.0"
+VERSION = "1.0.8"
 GITHUB_REPO = "bnbselfcare/glamiris-print-agent"
 RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
 SUPPORT_URL = "https://glamiris.com/support"

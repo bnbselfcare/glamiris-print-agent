@@ -216,11 +216,15 @@ class WindowsRawUSBPrinter:
         vid_hex = hex(vid).upper()
         pid_hex = hex(pid).upper()
 
+        logger.info(f"Searching for Windows printer with VID={vid_hex} PID={pid_hex}")
+
         try:
             # Get all printers
             printers = win32print.EnumPrinters(
                 win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS
             )
+
+            logger.info(f"Found {len(printers)} Windows printers")
 
             for flags, desc, name, comment in printers:
                 # Try to get printer port info
@@ -230,6 +234,8 @@ class WindowsRawUSBPrinter:
                         # Get printer info level 2 which includes port name
                         info = win32print.GetPrinter(hprinter, 2)
                         port_name = info.get('pPortName', '').upper()
+
+                        logger.debug(f"Checking printer '{name}' on port '{port_name}'")
 
                         # USB printers often have port names like "USB001" or contain VID/PID
                         # Some drivers include VID_xxxx&PID_xxxx in the port name
@@ -252,9 +258,27 @@ class WindowsRawUSBPrinter:
                     logger.debug(f"Could not get info for printer {name}: {e}")
                     continue
 
+            # If no printer found by VID/PID, try to find ANY printer on a USB port
+            # as a fallback (user may have only one USB printer)
+            logger.info("No VID/PID match, looking for any USB-connected printer...")
+            for flags, desc, name, comment in printers:
+                try:
+                    hprinter = win32print.OpenPrinter(name)
+                    try:
+                        info = win32print.GetPrinter(hprinter, 2)
+                        port_name = info.get('pPortName', '').upper()
+                        if port_name.startswith("USB"):
+                            logger.info(f"Found USB printer as fallback: {name} on {port_name}")
+                            return name
+                    finally:
+                        win32print.ClosePrinter(hprinter)
+                except:
+                    continue
+
         except Exception as e:
             logger.error(f"Error enumerating Windows printers: {e}")
 
+        logger.warning("No matching Windows printer found")
         return None
 
     def configure(self, vid, pid):
@@ -918,7 +942,7 @@ def status():
     return jsonify({
         "status": "ok",
         "agent": "Glamiris Python Print Agent",
-        "version": "1.0.0",
+        "version": "1.0.8",
         "configured": cfg.get("usb") or cfg.get("network")
     })
 
@@ -948,6 +972,51 @@ def detect_usb():
         })
 
     return jsonify({"devices": results})
+
+
+@app.get("/debug-windows-printers")
+def debug_windows_printers():
+    """Debug endpoint to see all Windows printers and their ports."""
+    if PLATFORM != "Windows" or not HAS_WIN32PRINT:
+        return jsonify({"error": "Only available on Windows", "platform": PLATFORM})
+
+    printers = []
+    try:
+        printer_list = win32print.EnumPrinters(
+            win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS
+        )
+
+        for flags, desc, name, comment in printer_list:
+            printer_info = {
+                "name": name,
+                "description": desc,
+                "comment": comment,
+                "flags": flags
+            }
+
+            # Try to get detailed info
+            try:
+                hprinter = win32print.OpenPrinter(name)
+                try:
+                    info = win32print.GetPrinter(hprinter, 2)
+                    printer_info["port"] = info.get('pPortName', '')
+                    printer_info["driver"] = info.get('pDriverName', '')
+                    printer_info["status"] = info.get('Status', 0)
+                finally:
+                    win32print.ClosePrinter(hprinter)
+            except Exception as e:
+                printer_info["error"] = str(e)
+
+            printers.append(printer_info)
+
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+    return jsonify({
+        "windows_printers": printers,
+        "count": len(printers),
+        "default": win32print.GetDefaultPrinter() if HAS_WIN32PRINT else None
+    })
 
 
 @app.get("/detect-printers")
@@ -1279,7 +1348,7 @@ def health_check():
 
     result = {
         "agent": "Glamiris Print Agent",
-        "version": "1.0.0",
+        "version": "1.0.8",
         "server": "running",
         "backend": backend,
         "configured": bool(cfg.get("usb") or cfg.get("system") or cfg.get("network", {}).get("host")),
