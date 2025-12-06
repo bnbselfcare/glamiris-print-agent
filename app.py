@@ -976,7 +976,7 @@ def status():
     return jsonify({
         "status": "ok",
         "agent": "Glamiris Python Print Agent",
-        "version": "1.0.10",
+        "version": "1.0.11",
         "configured": cfg.get("usb") or cfg.get("network")
     })
 
@@ -1382,7 +1382,7 @@ def health_check():
 
     result = {
         "agent": "Glamiris Print Agent",
-        "version": "1.0.10",
+        "version": "1.0.11",
         "server": "running",
         "backend": backend,
         "configured": bool(cfg.get("usb") or cfg.get("system") or cfg.get("network", {}).get("host")),
@@ -1438,6 +1438,111 @@ def health_check():
         result["message"] = "No printer configured"
 
     return jsonify(result)
+
+
+@app.post("/test-direct-usb")
+def test_direct_usb():
+    """
+    Test direct USB communication bypassing Windows Print Spooler.
+    Uses libusb to send ESC/POS commands directly to the USB device.
+    """
+    # Find the USB printer
+    usb_printers = detect_thermal_printers()
+
+    if not usb_printers:
+        return jsonify({"error": "No USB printer detected", "hint": "Check USB connection"}), 404
+
+    printer = usb_printers[0]
+    vid = printer["idVendor"]
+    pid = printer["idProduct"]
+
+    result = {
+        "printer": {
+            "vid": hex(vid),
+            "pid": hex(pid),
+            "manufacturer": printer.get("manufacturer", ""),
+            "product": printer.get("product", "")
+        },
+        "steps": []
+    }
+
+    try:
+        # Step 1: Find device
+        result["steps"].append("Finding USB device...")
+        dev = usb.core.find(idVendor=vid, idProduct=pid)
+        if dev is None:
+            return jsonify({"error": "Device not found", "result": result}), 500
+        result["steps"].append(f"Found device: {vid:04x}:{pid:04x}")
+
+        # Step 2: Detach kernel driver if needed
+        try:
+            if dev.is_kernel_driver_active(0):
+                result["steps"].append("Detaching kernel driver...")
+                dev.detach_kernel_driver(0)
+                result["steps"].append("Kernel driver detached")
+            else:
+                result["steps"].append("No kernel driver attached")
+        except (usb.core.USBError, NotImplementedError) as e:
+            result["steps"].append(f"Kernel driver check: {e}")
+
+        # Step 3: Set configuration
+        try:
+            result["steps"].append("Setting USB configuration...")
+            dev.set_configuration()
+            result["steps"].append("Configuration set")
+        except usb.core.USBError as e:
+            result["steps"].append(f"Set config (may already be set): {e}")
+
+        # Step 4: Find OUT endpoint
+        result["steps"].append("Finding OUT endpoint...")
+        cfg = dev.get_active_configuration()
+        intf = cfg[(0, 0)]
+        ep_out = None
+        for ep in intf:
+            if usb.util.endpoint_direction(ep.bEndpointAddress) == usb.util.ENDPOINT_OUT:
+                ep_out = ep
+                break
+
+        if ep_out is None:
+            # Try default endpoint
+            ep_out_addr = 0x01
+            result["steps"].append(f"No OUT endpoint found, using default 0x01")
+        else:
+            ep_out_addr = ep_out.bEndpointAddress
+            result["steps"].append(f"Found OUT endpoint: {hex(ep_out_addr)}")
+
+        # Step 5: Send test print
+        result["steps"].append("Sending ESC/POS test print...")
+        commands = b"\x1B\x40"  # Initialize
+        commands += b"=== DIRECT USB TEST ===\n"
+        commands += b"If you see this, USB works!\n"
+        commands += b"VID: " + f"{vid:04x}".encode() + b"\n"
+        commands += b"PID: " + f"{pid:04x}".encode() + b"\n"
+        commands += b"\n\n"
+        commands += b"\x1D\x56\x00"  # Cut
+
+        bytes_written = dev.write(ep_out_addr, commands)
+        result["steps"].append(f"Wrote {bytes_written} bytes")
+
+        # Cleanup
+        usb.util.dispose_resources(dev)
+        result["steps"].append("USB resources released")
+
+        result["status"] = "ok"
+        result["message"] = "Direct USB print sent successfully"
+        return jsonify(result)
+
+    except usb.core.USBError as e:
+        result["steps"].append(f"USB Error: {e}")
+        result["status"] = "error"
+        result["error"] = str(e)
+        result["error_code"] = e.errno if hasattr(e, 'errno') else None
+        return jsonify(result), 500
+    except Exception as e:
+        result["steps"].append(f"Error: {e}")
+        result["status"] = "error"
+        result["error"] = str(e)
+        return jsonify(result), 500
 
 
 @app.post("/reset-usb")
